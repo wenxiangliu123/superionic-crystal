@@ -1,0 +1,92 @@
+#------------------ 1. Initialization ------------------
+clear 
+
+variable		T equal	400
+
+units           metal 
+boundary        p p p
+atom_style      atomic
+
+read_data 		../unitcell
+replicate               6 6 6
+
+group Ag type 1
+group Te type 2
+
+pair_style lj/cut 10.0     	 	
+pair_coeff 1 1 0.02 2.77
+pair_coeff 2 2 0.50 3.91
+pair_coeff 1 2 0.05 2.40
+
+neighbor	0.3 bin
+neigh_modify	delay	0	every	1
+timestep        0.001
+
+thermo_style  custom  step  temp  press lx ly lz
+thermo        1000
+
+#=======================Running====================# 
+	
+   variable        steps_equil   equal   0.5e6
+   variable        steps_steady  equal   0.5e6
+   variable        dt_dump		 equal   100
+
+#------------------ 2. Equlibrium --------------------------
+	
+   velocity    all create ${T} 220404 dist gaussian mom yes
+   fix momentum all momentum 1 linear 1 1 1 rescale
+  
+   #------------------ 2.1 NPT --------------------------	
+   fix 			 NPT	 all	  npt  temp    ${T} ${T} 0.1 aniso 1.0 1.0 1.0
+   run			 ${steps_equil} 
+   unfix		 NPT
+  
+   #------------------ 2.2 NVT --------------------------	
+   fix 			 NVT	 all	  nvt  temp    ${T} ${T} 0.1 
+   run			 ${steps_equil}
+   unfix		 NVT
+
+   #------------------ 2.3 NVE --------------------------
+   fix                   NVE all nve
+   
+   run                   ${steps_equil}
+   unfix                 NVE
+#------------------ 3. EMD calculation --------------------------
+
+   reset_timestep 0
+
+   compute      myKE all ke/atom
+   compute      myPE all pe/atom
+   compute      myStress all centroid/stress/atom NULL virial
+   compute      flux all heat/flux myKE myPE myStress
+
+   compute      myKE_Ag Ag ke/atom
+   compute      myPE_Ag Ag pe/atom
+   compute      myStress_Ag Ag centroid/stress/atom NULL virial
+
+   compute      myKE_Te Te ke/atom
+   compute      myPE_Te Te pe/atom
+   compute      myStress_Te Te centroid/stress/atom NULL virial
+   
+   compute      Ag_mom Ag momentum
+
+   fix          NVE all nve
+
+   variable        VEAg atom (c_myStress_Ag[1]+c_myStress_Ag[2]+c_myStress_Ag[3])/3
+   variable        VETe atom (c_myStress_Te[1]+c_myStress_Te[2]+c_myStress_Te[3])/3
+   variable        VE atom (c_myStress[1]+c_myStress[2]+c_myStress[3])/3
+   variable        SUMAg atom c_myKE_Ag+c_myPE_Ag-v_VEAg*6.24e-7
+   variable        SUMTe atom c_myKE_Te+c_myPE_Te-v_VETe*6.24e-7
+   variable        SUM atom c_myKE+c_myPE-v_VE*6.24e-7
+   compute         hAg  all reduce sum v_SUMAg
+   compute         hTe  all reduce sum v_SUMTe
+   compute         h  all reduce sum v_SUM
+
+   variable        HAg equal c_hAg/count(Ag)
+   variable        HTe equal c_hTe/count(Te)
+
+   fix		Ave all ave/time 1 1 10 v_HAg v_HTe file enthalpy.txt
+   fix          2 all ave/time 1 1 10 c_flux[*] c_Ag_mom[*] file heat_momentum_flux.txt
+   run          ${steps_steady}
+
+   print        "Program is finished successfully" 
